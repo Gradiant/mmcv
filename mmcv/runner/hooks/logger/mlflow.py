@@ -7,20 +7,39 @@ from .base import LoggerHook
 
 
 @HOOKS.register_module
-class MLflowLoggerHook(LoggerHook):
+class MlflowLoggerHook(LoggerHook):
 
     def __init__(self,
-                 experiment_name,
-                 tracking_uri = None,
-                 tags = None,
+                 experiment_name=None,
+                 tags=None,
                  log_model=True,
                  interval=10,
                  ignore_last=True,
                  reset_flag=True):
-        super(MLflowLoggerHook, self).__init__(interval, ignore_last,
-                                              reset_flag)
+        """Class to log metrics and (optionally) a trained model to MLflow.
+
+        It requires `MLflow`_ to be installed.
+
+        Args:
+            experiment_name (str, optional): Name of the experiment to be used.
+                Default None.
+                If not None, set the active experiment.
+                If experiment does not exist, an experiment with provided name
+                will be created.
+            tags (dict of str: str, optional): Tags for the current run.
+                Default None.
+                If not None, set tags for the current run.
+            log_model (bool, optional): Wheter to log an MLflow artifact.
+                Default True.
+                If True, log runner.model as an MLflow artifact
+                for the current run.
+
+        .. _MLflow:
+            https://www.mlflow.org/docs/latest/index.html
+        """
+        super(MlflowLoggerHook, self).__init__(interval, ignore_last,
+                                               reset_flag)
         self.import_mlflow()
-        self._mlflow_client  = self.mlflow.MLflowClient(tracking_uri)
         self.experiment_name = experiment_name
         self.tags = tags
         self.log_model = log_model
@@ -28,23 +47,19 @@ class MLflowLoggerHook(LoggerHook):
     def import_mlflow(self):
         try:
             import mlflow
+            import mlflow.pytorch as mlflow_pytorch
         except ImportError:
             raise ImportError(
                 'Please run "pip install mlflow" to install mlflow')
         self.mlflow = mlflow
+        self.mlflow_pytorch = mlflow_pytorch
 
     @master_only
     def before_run(self, runner):
-        experiment = self._mlflow_client.get_experiment_by_name(self.experiment_name)
-        if experiment:
-            self._experiment_id = experiment.experiment_id
-        else:
-            runner.logger.warning(f'Experiment with name {self.experiment_name} not found. Creating it.')
-            self._experiment_id = self._mlflow_client.create_experiment(name=self.experiment_name)
-        
-        run = self._mlflow_client.create_run(experiment_id=self._experiment_id, tags=self.tags)
-        
-        self._run_id = run.info.run_id
+        if self.experiment_name is not None:
+            self.mlflow.set_experiment(self.experiment_name)
+        if self.tags is not None:
+            self.mlflow.set_tags(self.tags)
 
     @master_only
     def log(self, runner):
@@ -53,11 +68,11 @@ class MLflowLoggerHook(LoggerHook):
             if var in ['time', 'data_time']:
                 continue
             tag = '{}/{}'.format(var, runner.mode)
-            metrics[tag] = val
-            self._mlflow_client.log_metric(self._run_id, step=runner.iter)
+            if isinstance(val, numbers.Number):
+                metrics[tag] = val
+        self.mlflow.log_metrics(metrics, step=runner.iter)
 
     @master_only
     def after_run(self, runner):
         if self.log_model:
-            self.mlflow.pytorch.log_model(runner.model, "models")
-        self._mlflow_client.set_terminated(self._run_id)
+            self.mlflow_pytorch.log_model(runner.model, 'models')
