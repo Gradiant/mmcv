@@ -70,6 +70,7 @@ class MlflowLoggerHook(LoggerHook):
             tag = '{}/{}'.format(var, runner.mode)
             if isinstance(val, numbers.Number):
                 metrics[tag] = val
+        metrics['lr'] = runner.current_lr()[0]
         self.mlflow.log_metrics(metrics, step=runner.iter)
 
     @master_only
